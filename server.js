@@ -2,14 +2,52 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
+// const multer = require('multer'); // Commented out temporarily
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_LENGTH = 280;
 
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for image uploads (temporarily disabled)
+// const storage = multer.diskStorage({
+//     destination: (req, file, cb) => {
+//         cb(null, uploadsDir);
+//     },
+//     filename: (req, file, cb) => {
+//         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+//         cb(null, uniqueSuffix + path.extname(file.originalname));
+//     }
+// });
+
+// const upload = multer({
+//     storage: storage,
+//     limits: {
+//         fileSize: 5 * 1024 * 1024 // 5MB limit
+//     },
+//     fileFilter: (req, file, cb) => {
+//         const allowedTypes = /jpeg|jpg|png|gif|webp/;
+//         const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+//         const mimetype = allowedTypes.test(file.mimetype);
+//         
+//         if (mimetype && extname) {
+//             return cb(null, true);
+//         } else {
+//             cb(new Error('Only image files are allowed'));
+//         }
+//     }
+// });
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+app.use('/uploads', express.static('uploads'));
 
 // ── Database ──────────────────────────────────────────────
 
@@ -23,6 +61,7 @@ db.serialize(() => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         text TEXT NOT NULL,
         mood TEXT DEFAULT 'none',
+        image_url TEXT,
         likes INTEGER DEFAULT 0,
         reposts INTEGER DEFAULT 0,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -40,6 +79,13 @@ db.serialize(() => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         post_id INTEGER NOT NULL,
         text TEXT NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (post_id) REFERENCES posts(id)
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (post_id) REFERENCES posts(id)
     )`);
@@ -89,7 +135,7 @@ app.get('/api/posts', (req, res) => {
     });
 });
 
-// Create post
+// Create post (temporarily without image support)
 app.post('/api/posts', (req, res) => {
     const { text, mood } = req.body;
     if (!text || !text.trim()) return res.status(400).json({ error: 'Post cannot be empty' });
@@ -97,12 +143,34 @@ app.post('/api/posts', (req, res) => {
 
     const validMoods = ['none', 'love', 'happy', 'sad', 'angry', 'anxious', 'excited'];
     const safeMood = validMoods.includes(mood) ? mood : 'none';
+    
+    // const imageUrl = req.file ? `/uploads/${req.file.filename}` : null; // Temporarily disabled
+    const imageUrl = null;
 
-    db.run(`INSERT INTO posts (text, mood) VALUES (?, ?)`, [text.trim(), safeMood], function(err) {
+    db.run(`INSERT INTO posts (text, mood, image_url) VALUES (?, ?, ?)`, [text.trim(), safeMood, imageUrl], function(err) {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID, text: text.trim(), mood: safeMood, likes: 0, reposts: 0, reactions: {}, reply_count: 0 });
+        res.json({ id: this.lastID, text: text.trim(), mood: safeMood, image_url: imageUrl, likes: 0, reposts: 0, reactions: {}, reply_count: 0 });
     });
 });
+
+/*
+// Create post with image support (requires multer)
+app.post('/api/posts', upload.single('image'), (req, res) => {
+    const { text, mood } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'Post cannot be empty' });
+    if (text.trim().length > MAX_LENGTH) return res.status(400).json({ error: `Max ${MAX_LENGTH} characters` });
+
+    const validMoods = ['none', 'love', 'happy', 'sad', 'angry', 'anxious', 'excited'];
+    const safeMood = validMoods.includes(mood) ? mood : 'none';
+    
+    const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
+    db.run(`INSERT INTO posts (text, mood, image_url) VALUES (?, ?, ?)`, [text.trim(), safeMood, imageUrl], function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ id: this.lastID, text: text.trim(), mood: safeMood, image_url: imageUrl, likes: 0, reposts: 0, reactions: {}, reply_count: 0 });
+    });
+});
+*/
 
 // Like a post
 app.post('/api/posts/:id/like', (req, res) => {
@@ -161,6 +229,14 @@ app.post('/api/posts/:id/reply', (req, res) => {
     db.run(`INSERT INTO replies (post_id, text) VALUES (?, ?)`, [req.params.id, text.trim()], function(err) {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ id: this.lastID, post_id: Number(req.params.id), text: text.trim() });
+    });
+});
+
+// Report a post
+app.post('/api/posts/:id/report', (req, res) => {
+    db.run(`INSERT INTO reports (post_id) VALUES (?)`, [req.params.id], function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true, message: 'Post reported successfully' });
     });
 });
 
